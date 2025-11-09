@@ -1,46 +1,31 @@
-import os, requests, json, re
-from typing import Literal, Tuple
-from dotenv import find_dotenv, load_dotenv
+# backend/xai_client.py
+import os, requests
 
-load_dotenv(find_dotenv())
+XAI_KEY = os.getenv("XAI_KEY", "").strip()
+# Replace with your actual xAI endpoint if available.
+# Here we use a simple local heuristic fallback when no key is set.
 
-XAI_KEY = os.getenv("XAI_KEY")
-XAI_MODEL = os.getenv("XAI_MODEL", "grok-4-latest")
-BASE_URL = "https://api.x.ai/v1/chat/completions"
-
-if not XAI_KEY:
-    raise RuntimeError("XAI_KEY missing in .env")
-
-def classify_sentiment(text: str) -> Tuple[Literal[-1, 0, 1], float, str]:
+def score_with_xai(text: str, timeout: float = 8.0) -> float:
     """
-    Returns (label, score, rationale)
-      label: -1 negative, 0 neutral, 1 positive
-      score: float in [-1, 1]
-      rationale: short explanation
+    Returns a sentiment score in [-1.0, 1.0].
+    If XAI_KEY is not set, uses a trivial heuristic.
     """
-    system = (
-        "You label sentiment. Reply ONLY in strict JSON with fields: "
-        '{"label": -1|0|1, "score": -1..1, "rationale": "short reason"}'
-    )
-    user = f'Classify sentiment for this text:\n"""{text}"""'
+    if not XAI_KEY:
+        t = text.lower()
+        pos = sum(w in t for w in ["great","bull","pump","strong","optimistic","up"])
+        neg = sum(w in t for w in ["bad","bear","dump","weak","fear","down"])
+        score = (pos - neg) / 3.0
+        return max(-1.0, min(1.0, score))
 
-    headers = {"Authorization": f"Bearer {XAI_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": XAI_MODEL,
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": user}],
-        "temperature": 0,
-        "stream": False,
-        "max_tokens": 64  # keep responses tiny for speed
-    }
-    r = requests.post(BASE_URL, json=payload, headers=headers, timeout=25)
-    if r.status_code != 200:
-        raise RuntimeError(f"xAI error {r.status_code}: {r.text}")
-
-    content = r.json()["choices"][0]["message"]["content"]
-    m = re.search(r"\{.*\}", content, re.S)
-    data = json.loads(m.group(0)) if m else json.loads(content)
-    label = int(data.get("label", 0))
-    score = float(data.get("score", 0))
-    rationale = str(data.get("rationale", ""))
-    return label, score, rationale
+    # Example stub (adjust URL/payload for your xAI provider)
+    url = "https://api.x.ai/sentiment"  # placeholder
+    headers = {"Authorization": f"Bearer {XAI_KEY}"}
+    payload = {"text": text}
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        r.raise_for_status()
+        js = r.json()
+        return float(js.get("score", 0.0))
+    except Exception:
+        # graceful degrade
+        return 0.0

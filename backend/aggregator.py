@@ -1,32 +1,28 @@
-from typing import Dict, Any, List, Tuple
-from .x_fetcher import fetch_recent_tweets
-from .xai_client import classify_sentiment
+# backend/aggregator.py
+import time
+from statistics import fmean
+from backend.x_fetcher import fetch_recent_tweets
+from backend.xai_client import score_with_xai
 
-def analyze_topic(query: str, max_results: int = 25) -> Dict[str, Any]:
+def analyze_topic(query: str, max_results: int = 10):
+    """
+    Fetch tweets, score each, enforce a soft deadline to avoid UI timeouts.
+    """
+    start = time.time()
+    DEADLINE = 25.0  # seconds total budget
+
     tweets = fetch_recent_tweets(query, max_results=max_results)
-    # Hard cap for demo speed
-    tweets = tweets[:10]
+    items, pos, neg, neu = [], 0, 0, 0
 
-    results: List[Tuple[int, float, str]] = []
-    for i, t in enumerate(tweets, 1):
-        print(f"[analyze_topic] {i}/{len(tweets)} tweet_id={t.get('id')}")
-        label, score, why = classify_sentiment(t["text"])
-        results.append((label, score, why))
+    for i, tw in enumerate(tweets[:max_results], 1):
+        if time.time() - start > DEADLINE:
+            break
+        score = score_with_xai(tw["text"], timeout=6.0)
+        label = "pos" if score > 0.15 else "neg" if score < -0.15 else "neu"
+        pos += (label == "pos")
+        neg += (label == "neg")
+        neu += (label == "neu")
+        items.append({"id": tw["id"], "text": tw["text"], "score": score, "label": label})
 
-    n = len(results)
-    avg = sum(s for _, s, _ in results) / n if n else 0.0
-    pos = sum(1 for l, _, __ in results if l == 1)
-    neg = sum(1 for l, _, __ in results if l == -1)
-    neu = n - pos - neg
-
-    # Simple rule for MVP
-    signal = "YES" if avg > 0.15 and pos > neg else "NO" if avg < -0.15 and neg >= pos else "NEUTRAL"
-
-    return {
-        "query": query,
-        "count": n,
-        "avg_score": round(avg, 4),
-        "breakdown": {"pos": pos, "neg": neg, "neu": neu},
-        "signal": signal,
-        "samples": [{"text": t["text"]} for t in tweets[:5]],
-    }
+    avg = fmean([x["score"] for x in items]) if items else 0.0
+    return {"query": query, "avg_score": avg, "counts": {"pos": pos, "neg": neg, "neu": neu}, "items": items}
