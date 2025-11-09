@@ -85,3 +85,10 @@ id_ed25519.*
 *secret*.txt
 *token*.txt
 *credentials*.txt
+
+# Environment and secret files
+.env
+*.txt
+*.pem
+*.key
+xvir/
